@@ -2,7 +2,7 @@
 	import type { PageData } from './$types';
 	import { onMount, tick } from 'svelte';
 	import Hls from 'hls.js';
-	import type { InputTypeForRezkaRouter, StreamItem, SubtitleItem, DubbingItem, SeasonItem, EpisodeItem } from '$lib/types/rezka';
+	import type { InputTypeForRezkaRouter, ImdbTitleRecord, StreamItem, SubtitleItem, DubbingItem, SeasonItem, EpisodeItem } from '$lib/types/rezka';
 	import { loadMediaSettings, saveMediaSettings } from '$lib/utils/persisted-media-state';
 	import { number_toValidNonNegativeInt_unsafe } from '../../../core/toNumber/validNonNegativeInt.js';
 	import { parseVttText, type VttCue } from '$lib/utils/vtt-parser';
@@ -10,12 +10,11 @@
 
 	const ALL_QUALITIES = ['360p', '480p', '720p', '1080p', '1080p Ultra', '2K', '4K'] as const;
 
-	let { data }: { data: PageData & { rezkaData: InputTypeForRezkaRouter } } = $props();
-	let media = $derived(data.rezkaData);
+	let { data }: { data: PageData & { rezkaData: InputTypeForRezkaRouter; imdbData: ImdbTitleRecord } } = $props();
 
 	// Dubbing state
 	let defaultDubbingId = $derived(
-		media.dubbings.find((d) => d.hasVideo)?.translatorId ?? (media.dubbings[0]?.translatorId || 238)
+		data.rezkaData.dubbings.find((d) => d.hasVideo)?.translatorId ?? (data.rezkaData.dubbings[0]?.translatorId || 238)
 	);
 	let selectedDubbingId = $state<number | null>(null);
 	let activeDubbingId = $derived(selectedDubbingId ?? defaultDubbingId);
@@ -24,7 +23,7 @@
 	let selectedSeasonIndex = $state<number>(0);
 	let selectedEpisodeIndex = $state<number>(0);
 
-	let currentSeason = $derived<SeasonItem | undefined>(media.seasons[selectedSeasonIndex] || media.seasons[0]);
+	let currentSeason = $derived<SeasonItem | undefined>(data.rezkaData.seasons[selectedSeasonIndex] || data.rezkaData.seasons[0]);
 	let currentEpisode = $derived<EpisodeItem | undefined>(currentSeason?.episodes[selectedEpisodeIndex] || currentSeason?.episodes[0]);
 
 	// Streams and Subtitles fetched for the active episode
@@ -137,7 +136,7 @@
 			if (sub) loadSubtitleCues(sub);
 		}
 
-		saveMediaSettings(media.canonicalUrl, {
+		saveMediaSettings(data.rezkaData.canonicalUrl, {
 			enabledSubtitleCodes
 		});
 	}
@@ -148,7 +147,7 @@
 			const sub = activeSubtitles.find((s) => s.langCode === langCode);
 			if (sub) loadSubtitleCues(sub);
 		}
-		saveMediaSettings(media.canonicalUrl, {
+		saveMediaSettings(data.rezkaData.canonicalUrl, {
 			enabledSubtitleCodes: langCode === 'off' ? [] : [langCode]
 		});
 	}
@@ -159,7 +158,7 @@
 		subtitleCuesMap = {};
 
 		try {
-			const resp = await fetch(`/api/rezka/stream?id=${media.postId}&translator_id=${transId}&season=${seasonNum}&episode=${epNum}`);
+			const resp = await fetch(`/api/rezka/stream?id=${data.rezkaData.postId}&translator_id=${transId}&season=${seasonNum}&episode=${epNum}`);
 			const result = await resp.json();
 			if (result.success && result.streams && result.streams.length > 0) {
 				activeStreams = result.streams;
@@ -242,7 +241,7 @@
 
 	onMount(() => {
 		// Restore persisted media settings for this canonical URL
-		const saved = loadMediaSettings(media.canonicalUrl, {
+		const saved = loadMediaSettings(data.rezkaData.canonicalUrl, {
 			seasonIndex: number_toValidNonNegativeInt_unsafe(0),
 			episodeIndex: number_toValidNonNegativeInt_unsafe(0),
 			quality: '360p',
@@ -250,9 +249,9 @@
 			enabledSubtitleCodes: ['en']
 		});
 
-		if (saved.seasonIndex < media.seasons.length) {
+		if (saved.seasonIndex < data.rezkaData.seasons.length) {
 			selectedSeasonIndex = saved.seasonIndex;
-			const season = media.seasons[saved.seasonIndex];
+			const season = data.rezkaData.seasons[saved.seasonIndex];
 			if (season && saved.episodeIndex < season.episodes.length) {
 				selectedEpisodeIndex = saved.episodeIndex;
 			}
@@ -284,7 +283,7 @@
 	function handleSeasonChange(index: number) {
 		selectedSeasonIndex = index;
 		selectedEpisodeIndex = 0;
-		saveMediaSettings(media.canonicalUrl, {
+		saveMediaSettings(data.rezkaData.canonicalUrl, {
 			seasonIndex: number_toValidNonNegativeInt_unsafe(index),
 			episodeIndex: number_toValidNonNegativeInt_unsafe(0)
 		});
@@ -292,14 +291,14 @@
 
 	function handleEpisodeChange(index: number) {
 		selectedEpisodeIndex = index;
-		saveMediaSettings(media.canonicalUrl, {
+		saveMediaSettings(data.rezkaData.canonicalUrl, {
 			episodeIndex: number_toValidNonNegativeInt_unsafe(index)
 		});
 	}
 
 	function handleQualityChange(q: string) {
 		selectedQuality = q;
-		saveMediaSettings(media.canonicalUrl, {
+		saveMediaSettings(data.rezkaData.canonicalUrl, {
 			quality: q
 		});
 	}
@@ -310,7 +309,7 @@
 			return;
 		}
 		selectedDubbingId = dubbing.translatorId;
-		saveMediaSettings(media.canonicalUrl, {
+		saveMediaSettings(data.rezkaData.canonicalUrl, {
 			dubbingId: dubbing.translatorId
 		});
 	}
@@ -322,7 +321,7 @@
 </script>
 
 <svelte:head>
-	<title>{media.titleRu} ({media.titleEn}) - HDRezka Online</title>
+	<title>{data.rezkaData.titleRu} ({data.rezkaData.titleEn}) - HDRezka Online</title>
 </svelte:head>
 
 <div class="min-h-screen bg-zinc-950 text-zinc-100 font-sans antialiased selection:bg-amber-500/30 selection:text-amber-200">
@@ -353,24 +352,24 @@
 		<section class="space-y-3">
 			<div class="flex flex-wrap items-center gap-3">
 				<h1 class="text-3xl md:text-4xl font-extrabold text-white tracking-tight">
-					{media.titleRu}
+					{data.rezkaData.titleRu}
 				</h1>
-				{#if media.titleEn}
+				{#if data.rezkaData.titleEn}
 					<span class="text-2xl md:text-3xl font-semibold text-zinc-400 font-serif">
-						/ {media.titleEn}
+						/ {data.rezkaData.titleEn}
 					</span>
 				{/if}
 			</div>
 
 			<div class="flex flex-wrap items-center gap-2.5 text-xs text-zinc-300">
-				{#if media.status}
+				{#if data.rezkaData.status}
 					<span class="px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-semibold">
-						{media.status}
+						{data.rezkaData.status}
 					</span>
 				{/if}
-				{#if media.qualityTag}
+				{#if data.rezkaData.qualityTag}
 					<span class="px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 font-semibold">
-						Смотреть {media.titleRu} онлайн в HD качестве {media.qualityTag}
+						Смотреть {data.rezkaData.titleRu} онлайн в HD качестве {data.rezkaData.qualityTag}
 					</span>
 				{/if}
 				<button type="button" class="px-3 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 transition-colors font-medium flex items-center gap-1.5">
@@ -394,7 +393,7 @@
 				</div>
 
 				<div class="flex flex-wrap gap-2">
-					{#each media.dubbings as dubbing (dubbing.translatorId)}
+					{#each data.rezkaData.dubbings as dubbing (dubbing.translatorId)}
 						{@const isActive = dubbing.translatorId === activeDubbingId}
 						{@const isEnabled = dubbing.hasVideo}
 						<button
@@ -558,7 +557,7 @@
 			<div class="space-y-2">
 				<span class="text-xs font-bold uppercase tracking-wider text-zinc-400">Сезоны:</span>
 				<div class="flex flex-wrap gap-2">
-					{#each media.seasons as season, sIndex (season.seasonNumber)}
+					{#each data.rezkaData.seasons as season, sIndex (season.seasonNumber)}
 						<button
 							type="button"
 							onclick={() => handleSeasonChange(sIndex)}
@@ -607,32 +606,32 @@
 						<svg class="w-5 h-5 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
 						</svg>
-						<span>О сериале «{media.titleRu}»</span>
+						<span>О сериале «{data.rezkaData.titleRu}»</span>
 					</h3>
 
 					<dl class="grid grid-cols-1 sm:grid-cols-3 gap-y-4 gap-x-6 text-sm">
 						<!-- Ratings -->
 						<dt class="font-medium text-zinc-400">Рейтинги:</dt>
 						<dd class="sm:col-span-2 flex flex-wrap gap-4 text-zinc-200">
-							{#if media.imdbRating}
+							{#if data.rezkaData.imdbRating}
 								<span class="inline-flex items-center gap-1.5 font-bold text-amber-400">
 									<span class="px-1.5 py-0.5 rounded bg-amber-500 text-zinc-950 text-[10px] font-black">IMDb</span>
-									{media.imdbRating} <span class="font-normal text-zinc-400 text-xs">{media.imdbVotes}</span>
+									{data.rezkaData.imdbRating} <span class="font-normal text-zinc-400 text-xs">{data.rezkaData.imdbVotes}</span>
 								</span>
 							{/if}
-							{#if media.kpRating}
+							{#if data.rezkaData.kpRating}
 								<span class="inline-flex items-center gap-1.5 font-bold text-orange-400">
 									<span class="px-1.5 py-0.5 rounded bg-orange-500 text-zinc-950 text-[10px] font-black">Кинопоиск</span>
-									{media.kpRating} <span class="font-normal text-zinc-400 text-xs">{media.kpVotes}</span>
+									{data.rezkaData.kpRating} <span class="font-normal text-zinc-400 text-xs">{data.rezkaData.kpVotes}</span>
 								</span>
 							{/if}
 						</dd>
 
 						<!-- Lists -->
-						{#if media.lists.length > 0}
+						{#if data.rezkaData.lists.length > 0}
 							<dt class="font-medium text-zinc-400">Входит в списки:</dt>
 							<dd class="sm:col-span-2 space-y-1 text-zinc-300">
-								{#each media.lists as listTitle (listTitle)}
+								{#each data.rezkaData.lists as listTitle (listTitle)}
 									<div class="flex items-center gap-2">
 										<span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
 										<span>{listTitle}</span>
@@ -642,34 +641,34 @@
 						{/if}
 
 						<!-- Tagline -->
-						{#if media.tagline}
+						{#if data.rezkaData.tagline}
 							<dt class="font-medium text-zinc-400">Слоган:</dt>
-							<dd class="sm:col-span-2 text-zinc-200 italic">{media.tagline}</dd>
+							<dd class="sm:col-span-2 text-zinc-200 italic">{data.rezkaData.tagline}</dd>
 						{/if}
 
 						<!-- Release date -->
-						{#if media.releaseDate}
+						{#if data.rezkaData.releaseDate}
 							<dt class="font-medium text-zinc-400">Дата выхода:</dt>
-							<dd class="sm:col-span-2 text-zinc-200">{media.releaseDate}</dd>
+							<dd class="sm:col-span-2 text-zinc-200">{data.rezkaData.releaseDate}</dd>
 						{/if}
 
 						<!-- Country -->
-						{#if media.country}
+						{#if data.rezkaData.country}
 							<dt class="font-medium text-zinc-400">Страна:</dt>
-							<dd class="sm:col-span-2 text-zinc-200">{media.country}</dd>
+							<dd class="sm:col-span-2 text-zinc-200">{data.rezkaData.country}</dd>
 						{/if}
 
 						<!-- Directors -->
-						{#if media.directors.length > 0}
+						{#if data.rezkaData.directors.length > 0}
 							<dt class="font-medium text-zinc-400">Режиссер:</dt>
-							<dd class="sm:col-span-2 text-zinc-200">{media.directors.join(', ')}</dd>
+							<dd class="sm:col-span-2 text-zinc-200">{data.rezkaData.directors.join(', ')}</dd>
 						{/if}
 
 						<!-- Genres -->
-						{#if media.genres.length > 0}
+						{#if data.rezkaData.genres.length > 0}
 							<dt class="font-medium text-zinc-400">Жанр:</dt>
 							<dd class="sm:col-span-2 flex flex-wrap gap-1.5">
-								{#each media.genres as g (g)}
+								{#each data.rezkaData.genres as g (g)}
 									<span class="px-2.5 py-0.5 rounded-md bg-zinc-800 text-zinc-200 border border-zinc-700 text-xs">
 										{g}
 									</span>
@@ -678,28 +677,28 @@
 						{/if}
 
 						<!-- Quality -->
-						{#if media.qualityTag}
+						{#if data.rezkaData.qualityTag}
 							<dt class="font-medium text-zinc-400">В качестве:</dt>
-							<dd class="sm:col-span-2 text-zinc-200 font-mono font-bold text-amber-400">{media.qualityTag}</dd>
+							<dd class="sm:col-span-2 text-zinc-200 font-mono font-bold text-amber-400">{data.rezkaData.qualityTag}</dd>
 						{/if}
 
 						<!-- Age rating -->
-						{#if media.ageRating}
+						{#if data.rezkaData.ageRating}
 							<dt class="font-medium text-zinc-400">Возраст:</dt>
-							<dd class="sm:col-span-2 text-zinc-200">{media.ageRating}</dd>
+							<dd class="sm:col-span-2 text-zinc-200">{data.rezkaData.ageRating}</dd>
 						{/if}
 
 						<!-- Runtime -->
-						{#if media.runtime}
+						{#if data.rezkaData.runtime}
 							<dt class="font-medium text-zinc-400">Время:</dt>
-							<dd class="sm:col-span-2 text-zinc-200">{media.runtime}</dd>
+							<dd class="sm:col-span-2 text-zinc-200">{data.rezkaData.runtime}</dd>
 						{/if}
 
 						<!-- Collections -->
-						{#if media.collections.length > 0}
+						{#if data.rezkaData.collections.length > 0}
 							<dt class="font-medium text-zinc-400">Из серии:</dt>
 							<dd class="sm:col-span-2 flex flex-wrap gap-1.5">
-								{#each media.collections as c (c)}
+								{#each data.rezkaData.collections as c (c)}
 									<span class="px-2 py-0.5 rounded-md bg-zinc-800/80 text-zinc-300 text-xs">
 										{c}
 									</span>
@@ -708,33 +707,116 @@
 						{/if}
 
 						<!-- Cast -->
-						{#if media.cast.length > 0}
+						{#if data.rezkaData.cast.length > 0}
 							<dt class="font-medium text-zinc-400">В ролях актеры:</dt>
 							<dd class="sm:col-span-2 text-zinc-300 leading-relaxed">
-								{media.cast.join(', ')}
+								{data.rezkaData.cast.join(', ')}
 							</dd>
 						{/if}
 					</dl>
 				</div>
 
 				<!-- Synopsis Block -->
-				{#if media.synopsis}
+				{#if data.rezkaData.synopsis}
 					<div class="rounded-3xl bg-zinc-900 border border-zinc-800/80 p-6 space-y-3 shadow-xl">
 						<h3 class="text-base font-bold text-white flex items-center gap-2">
 							<svg class="w-4 h-4 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h7" />
 							</svg>
-							<span>Про что сериал «{media.titleRu}»:</span>
+							<span>Про что сериал «{data.rezkaData.titleRu}»:</span>
 						</h3>
 						<p class="text-zinc-300 text-sm leading-relaxed whitespace-pre-line">
-							{media.synopsis}
+							{data.rezkaData.synopsis}
 						</p>
 					</div>
 				{/if}
 			</div>
 
-			<!-- Right column: Extra details & Highlights -->
+			<!-- Right column: IMDb Database Details & Subtitles Info -->
 			<div class="space-y-6">
+				<!-- Official IMDb Local Archive Data Card -->
+				{#if data.imdbData}
+					<div class="rounded-3xl bg-zinc-900 border border-zinc-800/80 p-6 space-y-5 shadow-xl">
+						<div class="flex items-center justify-between border-b border-zinc-800 pb-3">
+							<div class="flex items-center gap-2">
+								<span class="px-2 py-0.5 rounded bg-amber-500 text-zinc-950 text-xs font-black">IMDb</span>
+								<h3 class="text-sm font-bold text-white tracking-wide">Database Record</h3>
+							</div>
+							<a
+								href="https://www.imdb.com/title/{data.imdbData.tconst}/"
+								target="_blank"
+								rel="noopener noreferrer"
+								class="text-[11px] font-mono text-amber-400 hover:text-amber-300 transition-colors flex items-center gap-1"
+							>
+								<span>{data.imdbData.tconst}</span>
+								<svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+								</svg>
+							</a>
+						</div>
+
+						<div class="space-y-3.5 text-xs">
+							<div class="flex items-center justify-between">
+								<span class="text-zinc-400">Primary Title:</span>
+								<span class="font-bold text-zinc-100">{data.imdbData.primaryTitle}</span>
+							</div>
+
+							{#if data.imdbData.originalTitle && data.imdbData.originalTitle !== data.imdbData.primaryTitle}
+								<div class="flex items-center justify-between">
+									<span class="text-zinc-400">Original Title:</span>
+									<span class="italic text-zinc-300">{data.imdbData.originalTitle}</span>
+								</div>
+							{/if}
+
+							<div class="flex items-center justify-between">
+								<span class="text-zinc-400">IMDb Rating:</span>
+								<span class="font-bold text-amber-400 flex items-center gap-1">
+									<svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 20 20">
+										<path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
+									</svg>
+									<span>{data.imdbData.averageRating ?? 'N/A'}</span>
+									<span class="text-zinc-500 font-normal">({data.imdbData.numVotes?.toLocaleString() ?? 0} votes)</span>
+								</span>
+							</div>
+
+							<div class="flex items-center justify-between">
+								<span class="text-zinc-400">Title Type:</span>
+								<span class="px-2 py-0.5 rounded bg-zinc-800 text-zinc-200 border border-zinc-700 font-medium capitalize">
+									{data.imdbData.titleType}
+								</span>
+							</div>
+
+							{#if data.imdbData.startYear}
+								<div class="flex items-center justify-between">
+									<span class="text-zinc-400">Years:</span>
+									<span class="font-mono text-zinc-200">{data.imdbData.startYear}{data.imdbData.endYear ? `–${data.imdbData.endYear}` : ''}</span>
+								</div>
+							{/if}
+
+							{#if data.imdbData.runtimeMinutes}
+								<div class="flex items-center justify-between">
+									<span class="text-zinc-400">Runtime:</span>
+									<span class="text-zinc-200">{data.imdbData.runtimeMinutes} min</span>
+								</div>
+							{/if}
+
+							{#if data.imdbData.genres && data.imdbData.genres.length > 0}
+								<div class="space-y-1.5 pt-2 border-t border-zinc-800/80">
+									<span class="text-zinc-400 block font-medium">IMDb Genres:</span>
+									<div class="flex flex-wrap gap-1.5">
+										{#each data.imdbData.genres as g (g)}
+											<span class="px-2 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/20 text-[11px]">
+												{g}
+											</span>
+										{/each}
+									</div>
+								</div>
+							{/if}
+						</div>
+					</div>
+				{/if}
+
+				<!-- Subtitles Info Card -->
 				<div class="rounded-3xl bg-gradient-to-br from-zinc-900 to-zinc-950 border border-zinc-800/80 p-6 space-y-5 shadow-xl">
 					<h3 class="text-base font-bold text-white flex items-center gap-2">
 						<span class="w-2 h-2 rounded-full bg-amber-500"></span>

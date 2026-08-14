@@ -59,3 +59,18 @@ export interface InputTypeForRezkaRouter {
 	initialStreams: StreamItem[];
 	initialSubtitles: SubtitleItem[];
 }
+
+export interface ImdbTitleRecord {
+	tconst: string;
+	titleType: string;
+	primaryTitle: string;
+	originalTitle: string | null;
+	isAdult: boolean;
+	startYear: number | null;
+	endYear: number | null;
+	runtimeMinutes: number | null;
+	averageRating: string | null;
+	numVotes: number | null;
+	genres: string[];
+}
+

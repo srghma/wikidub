@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "scraper:start": "bun run scraper/index.ts",
-    "scraper:test": "bun test"
+    "scraper:test": "bun test",
+    "web:dev": "bun --bun run --cwd web dev"
   },
   "dependencies": {
     "@typescript/native-preview": "7.0.0-dev.20260707.2",
