@@ -1,3 +1,9 @@
+packages:
+  - '.'
+  - 'web'
+
 allowBuilds:
   puppeteer: false
   sharp: true
+  esbuild: true
+  '@esbuild/*': true
