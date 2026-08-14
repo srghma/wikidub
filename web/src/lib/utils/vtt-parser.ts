@@ -1,32 +1,42 @@
+import type { ValidNonNegativeNumber } from '../../core/toNumber/validNonNegativeNumber.js';
+import {
+	strToNonNegativeNumberOrUndefined_lenient,
+	numberToValidNonNegativeNumberOrUndefined,
+	number_toValidNonNegativeNumber_unsafe
+} from '../../core/toNumber/validNonNegativeNumber.js';
+import type { NonEmptyStringTrimmed } from '../../core/non-empty-string-trimmed.js';
+import { String_toNonEmptyString_orUndefined_afterTrim } from '../../core/non-empty-string-trimmed.js';
+
 export interface VttCue {
-	start: number;
-	end: number;
-	text: string;
+	start: ValidNonNegativeNumber;
+	end: ValidNonNegativeNumber;
+	text: NonEmptyStringTrimmed;
 }
 
-function parseTimestamp(timestamp: string): number {
+function parseTimestamp(timestamp: string): ValidNonNegativeNumber {
 	const clean = timestamp.trim().replace(',', '.');
 	const parts = clean.split(':');
 	if (parts.length === 3) {
-		const hours = parseFloat(parts[0]);
-		const minutes = parseFloat(parts[1]);
-		const seconds = parseFloat(parts[2]);
-		return (isNaN(hours) ? 0 : hours) * 3600 + (isNaN(minutes) ? 0 : minutes) * 60 + (isNaN(seconds) ? 0 : seconds);
+		const hours = strToNonNegativeNumberOrUndefined_lenient(parts[0]) ?? 0;
+		const minutes = strToNonNegativeNumberOrUndefined_lenient(parts[1]) ?? 0;
+		const seconds = strToNonNegativeNumberOrUndefined_lenient(parts[2]) ?? 0;
+		const total = hours * 3600 + minutes * 60 + seconds;
+		return numberToValidNonNegativeNumberOrUndefined(total) ?? number_toValidNonNegativeNumber_unsafe(0);
 	} else if (parts.length === 2) {
-		const minutes = parseFloat(parts[0]);
-		const seconds = parseFloat(parts[1]);
-		return (isNaN(minutes) ? 0 : minutes) * 60 + (isNaN(seconds) ? 0 : seconds);
+		const minutes = strToNonNegativeNumberOrUndefined_lenient(parts[0]) ?? 0;
+		const seconds = strToNonNegativeNumberOrUndefined_lenient(parts[1]) ?? 0;
+		const total = minutes * 60 + seconds;
+		return numberToValidNonNegativeNumberOrUndefined(total) ?? number_toValidNonNegativeNumber_unsafe(0);
 	}
-	const direct = parseFloat(clean);
-	return isNaN(direct) ? 0 : direct;
+	return strToNonNegativeNumberOrUndefined_lenient(clean) ?? number_toValidNonNegativeNumber_unsafe(0);
 }
 
 export function parseVttText(vtt: string): VttCue[] {
 	const lines = vtt.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
 	const cues: VttCue[] = [];
 
-	let currentStart = 0;
-	let currentEnd = 0;
+	let currentStart: ValidNonNegativeNumber = number_toValidNonNegativeNumber_unsafe(0);
+	let currentEnd: ValidNonNegativeNumber = number_toValidNonNegativeNumber_unsafe(0);
 	let currentTextLines: string[] = [];
 	let isReadingCue = false;
 
@@ -36,29 +46,35 @@ export function parseVttText(vtt: string): VttCue[] {
 		if (line.includes('-->')) {
 			// Save previous cue if any
 			if (isReadingCue && currentTextLines.length > 0) {
-				cues.push({
-					start: currentStart,
-					end: currentEnd,
-					text: currentTextLines.join(' ').replace(/<[^>]*>/g, '').trim()
-				});
+				const fullText = currentTextLines.join(' ').replace(/<[^>]*>/g, '');
+				const validText = String_toNonEmptyString_orUndefined_afterTrim(fullText);
+				if (validText) {
+					cues.push({
+						start: currentStart,
+						end: currentEnd,
+						text: validText
+					});
+				}
 				currentTextLines = [];
 			}
 
 			const [startPart, endPart] = line.split('-->');
 			currentStart = parseTimestamp(startPart.trim());
-			// End part may contain cue settings after space, e.g. "00:01:10.028 align:start"
 			const endTimestampStr = endPart.trim().split(/\s+/)[0];
 			currentEnd = parseTimestamp(endTimestampStr);
 			isReadingCue = true;
 		} else if (isReadingCue) {
 			if (line.length === 0) {
-				// End of current cue block
 				if (currentTextLines.length > 0) {
-					cues.push({
-						start: currentStart,
-						end: currentEnd,
-						text: currentTextLines.join(' ').replace(/<[^>]*>/g, '').trim()
-					});
+					const fullText = currentTextLines.join(' ').replace(/<[^>]*>/g, '');
+					const validText = String_toNonEmptyString_orUndefined_afterTrim(fullText);
+					if (validText) {
+						cues.push({
+							start: currentStart,
+							end: currentEnd,
+							text: validText
+						});
+					}
 					currentTextLines = [];
 				}
 				isReadingCue = false;
@@ -69,11 +85,15 @@ export function parseVttText(vtt: string): VttCue[] {
 	}
 
 	if (isReadingCue && currentTextLines.length > 0) {
-		cues.push({
-			start: currentStart,
-			end: currentEnd,
-			text: currentTextLines.join(' ').replace(/<[^>]*>/g, '').trim()
-		});
+		const fullText = currentTextLines.join(' ').replace(/<[^>]*>/g, '');
+		const validText = String_toNonEmptyString_orUndefined_afterTrim(fullText);
+		if (validText) {
+			cues.push({
+				start: currentStart,
+				end: currentEnd,
+				text: validText
+			});
+		}
 	}
 
 	return cues;

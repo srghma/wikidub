@@ -2,14 +2,15 @@
 	import type { PageData } from './$types';
 	import { onMount, tick } from 'svelte';
 	import Hls from 'hls.js';
-	import type { StreamItem, SubtitleItem, DubbingItem, SeasonItem, EpisodeItem } from '$lib/types/rezka';
+	import type { InputTypeForRezkaRouter, StreamItem, SubtitleItem, DubbingItem, SeasonItem, EpisodeItem } from '$lib/types/rezka';
 	import { loadMediaSettings, saveMediaSettings } from '$lib/utils/persisted-media-state';
+	import { number_toValidNonNegativeInt_unsafe } from '../../../core/toNumber/validNonNegativeInt.js';
 	import { parseVttText, type VttCue } from '$lib/utils/vtt-parser';
-	import { rezkaVideoWatching_subtitles } from '$lib/app-config';
+	import { rezkaVideoWatching_subtitles, rezkaVideoWatching_videoLoadingMode } from '$lib/app-config';
 
 	const ALL_QUALITIES = ['360p', '480p', '720p', '1080p', '1080p Ultra', '2K', '4K'] as const;
 
-	let { data }: { data: PageData } = $props();
+	let { data }: { data: PageData & { rezkaData: InputTypeForRezkaRouter } } = $props();
 	let media = $derived(data.rezkaData);
 
 	// Dubbing state
@@ -43,7 +44,13 @@
 		const record: Record<string, StreamItem> = {};
 		activeStreams.forEach((s) => {
 			if (!s.isPremium) {
-				record[s.quality] = s;
+				if (!record[s.quality]) {
+					record[s.quality] = s;
+				} else if (rezkaVideoWatching_videoLoadingMode === 'like_rezka.ag' && s.streamUrl.includes('.m3u8')) {
+					record[s.quality] = s;
+				} else if (rezkaVideoWatching_videoLoadingMode === 'simple' && !s.streamUrl.includes('.m3u8')) {
+					record[s.quality] = s;
+				}
 			}
 		});
 		return record;
@@ -190,7 +197,10 @@
 			}
 			hlsInstance = new Hls({
 				enableWorker: true,
-				lowLatencyMode: false
+				lowLatencyMode: false,
+				maxBufferLength: 30,
+				maxMaxBufferLength: 60,
+				startFragPrefetch: true
 			});
 			hlsInstance.loadSource(url);
 			hlsInstance.attachMedia(videoElement);
@@ -233,8 +243,8 @@
 	onMount(() => {
 		// Restore persisted media settings for this canonical URL
 		const saved = loadMediaSettings(media.canonicalUrl, {
-			seasonIndex: 0,
-			episodeIndex: 0,
+			seasonIndex: number_toValidNonNegativeInt_unsafe(0),
+			episodeIndex: number_toValidNonNegativeInt_unsafe(0),
 			quality: '360p',
 			dubbingId: defaultDubbingId,
 			enabledSubtitleCodes: ['en']
@@ -275,15 +285,15 @@
 		selectedSeasonIndex = index;
 		selectedEpisodeIndex = 0;
 		saveMediaSettings(media.canonicalUrl, {
-			seasonIndex: index,
-			episodeIndex: 0
+			seasonIndex: number_toValidNonNegativeInt_unsafe(index),
+			episodeIndex: number_toValidNonNegativeInt_unsafe(0)
 		});
 	}
 
 	function handleEpisodeChange(index: number) {
 		selectedEpisodeIndex = index;
 		saveMediaSettings(media.canonicalUrl, {
-			episodeIndex: index
+			episodeIndex: number_toValidNonNegativeInt_unsafe(index)
 		});
 	}
 

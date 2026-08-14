@@ -6,7 +6,7 @@ import { ilike, eq, or } from 'drizzle-orm';
 import { extractRezkaDataFromHtml } from '$lib/server/rezka/extract';
 import type { InputTypeForRezkaRouter } from '$lib/types/rezka';
 
-export const load: PageServerLoad = async ({ params }): Promise<{ rezkaData: InputTypeForRezkaRouter }> => {
+export const load = (async ({ params }) => {
 	const subpath = params.url || '';
 	const fullUrl = `https://rezka.ag/${subpath.replace(/^\//, '')}`;
 
@@ -51,4 +51,4 @@ export const load: PageServerLoad = async ({ params }): Promise<{ rezkaData: Inp
 	return {
 		rezkaData
 	};
-};
+}) satisfies PageServerLoad;

@@ -1,21 +1,31 @@
+import type { ValidNonNegativeInt } from '../../core/toNumber/validNonNegativeInt.js';
+import {
+	numberToValidNonNegativeIntOrUndefined,
+	number_toValidNonNegativeInt_unsafe
+} from '../../core/toNumber/validNonNegativeInt.js';
+import {
+	String_toNonEmptyString_orUndefined_afterTrim
+} from '../../core/non-empty-string-trimmed.js';
+
 export interface PersistedMediaSettings {
-	seasonIndex: number;
-	episodeIndex: number;
+	seasonIndex: ValidNonNegativeInt;
+	episodeIndex: ValidNonNegativeInt;
 	quality: string;
 	dubbingId: number | null;
 	enabledSubtitleCodes: string[];
 }
 
 const DEFAULT_SETTINGS: PersistedMediaSettings = {
-	seasonIndex: 0,
-	episodeIndex: 0,
+	seasonIndex: number_toValidNonNegativeInt_unsafe(0),
+	episodeIndex: number_toValidNonNegativeInt_unsafe(0),
 	quality: '360p',
 	dubbingId: null,
 	enabledSubtitleCodes: ['en']
 };
 
 function getStorageKey(canonicalUrl: string): string {
-	return `wikidub_media:${canonicalUrl.trim()}`;
+	const trimmed = String_toNonEmptyString_orUndefined_afterTrim(canonicalUrl) ?? 'default';
+	return `wikidub_media:${trimmed}`;
 }
 
 export function loadMediaSettings(canonicalUrl: string, defaults?: Partial<PersistedMediaSettings>): PersistedMediaSettings {
@@ -29,9 +39,12 @@ export function loadMediaSettings(canonicalUrl: string, defaults?: Partial<Persi
 			return { ...DEFAULT_SETTINGS, ...defaults };
 		}
 		const parsed = JSON.parse(raw);
+		const parsedSeason = typeof parsed.seasonIndex === 'number' ? numberToValidNonNegativeIntOrUndefined(parsed.seasonIndex) : undefined;
+		const parsedEpisode = typeof parsed.episodeIndex === 'number' ? numberToValidNonNegativeIntOrUndefined(parsed.episodeIndex) : undefined;
+
 		return {
-			seasonIndex: typeof parsed.seasonIndex === 'number' ? parsed.seasonIndex : (defaults?.seasonIndex ?? DEFAULT_SETTINGS.seasonIndex),
-			episodeIndex: typeof parsed.episodeIndex === 'number' ? parsed.episodeIndex : (defaults?.episodeIndex ?? DEFAULT_SETTINGS.episodeIndex),
+			seasonIndex: parsedSeason ?? defaults?.seasonIndex ?? DEFAULT_SETTINGS.seasonIndex,
+			episodeIndex: parsedEpisode ?? defaults?.episodeIndex ?? DEFAULT_SETTINGS.episodeIndex,
 			quality: typeof parsed.quality === 'string' ? parsed.quality : (defaults?.quality ?? DEFAULT_SETTINGS.quality),
 			dubbingId: typeof parsed.dubbingId === 'number' ? parsed.dubbingId : (defaults?.dubbingId ?? DEFAULT_SETTINGS.dubbingId),
 			enabledSubtitleCodes: Array.isArray(parsed.enabledSubtitleCodes) ? parsed.enabledSubtitleCodes : (defaults?.enabledSubtitleCodes ?? DEFAULT_SETTINGS.enabledSubtitleCodes)
