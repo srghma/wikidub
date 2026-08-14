@@ -8,6 +8,13 @@ export const rawCachedPages = pgTable('raw_cached_pages', {
 	fetchedAt: timestamp('fetched_at', { withTimezone: true }).defaultNow().notNull()
 });
 
+export const rawCachedSubtitles = pgTable('raw_cached_subtitles', {
+	id: serial('id').primaryKey(),
+	url: text('url').notNull().unique(),
+	vttContent: text('vtt_content').notNull(),
+	fetchedAt: timestamp('fetched_at', { withTimezone: true }).defaultNow().notNull()
+});
+
 export const imdbTitles = pgTable('imdb_titles', {
 	tconst: text('tconst').primaryKey(),
 	titleType: text('title_type').notNull(),

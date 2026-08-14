@@ -1,10 +1,10 @@
 import { json, type RequestHandler } from '@sveltejs/kit';
 import { decodeVideoURL, decodeSubtitleURL } from '$lib/server/rezka/extract';
-import puppeteer from 'puppeteer';
+import puppeteer, { type Browser, type Page } from 'puppeteer';
 
-let cachedBrowser: any = null;
+let cachedBrowser: Browser | null = null;
 
-async function getChromeBrowser() {
+async function getChromeBrowser(): Promise<Browser | null> {
 	if (cachedBrowser && cachedBrowser.connected) {
 		return cachedBrowser;
 	}
@@ -16,7 +16,7 @@ async function getChromeBrowser() {
 			defaultViewport: null
 		});
 		return cachedBrowser;
-	} catch (e) {
+	} catch {
 		return null;
 	}
 }
@@ -30,8 +30,8 @@ export const GET: RequestHandler = async ({ url }) => {
 	try {
 		const browser = await getChromeBrowser();
 		if (browser) {
-			const pages = await browser.pages();
-			let targetPage = pages.find((p: any) => p.url().includes('rezka.ag'));
+			const pages: Page[] = await browser.pages();
+			let targetPage = pages.find((p) => p.url().includes('rezka.ag'));
 			if (!targetPage) {
 				targetPage = await browser.newPage();
 				await targetPage.goto('https://rezka.ag/series/thriller/646-vo-vse-tyazhkie-2008-latest.html', { waitUntil: 'domcontentloaded' });
@@ -71,10 +71,11 @@ export const GET: RequestHandler = async ({ url }) => {
 			success: false,
 			error: 'Failed to fetch CDN stream from browser session'
 		}, { status: 400 });
-	} catch (err: any) {
+	} catch (err: unknown) {
+		const message = err instanceof Error ? err.message : 'Internal error';
 		return json({
 			success: false,
-			error: err?.message || 'Internal error'
+			error: message
 		}, { status: 500 });
 	}
 };

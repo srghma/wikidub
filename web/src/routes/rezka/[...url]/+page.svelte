@@ -2,7 +2,12 @@
 	import type { PageData } from './$types';
 	import { onMount, tick } from 'svelte';
 	import Hls from 'hls.js';
-	import type { StreamItem, SubtitleItem } from '$lib/types/rezka';
+	import type { StreamItem, SubtitleItem, DubbingItem, SeasonItem, EpisodeItem } from '$lib/types/rezka';
+	import { loadMediaSettings, saveMediaSettings } from '$lib/utils/persisted-media-state';
+	import { parseVttText, type VttCue } from '$lib/utils/vtt-parser';
+	import { rezkaVideoWatching_subtitles } from '$lib/app-config';
+
+	const ALL_QUALITIES = ['360p', '480p', '720p', '1080p', '1080p Ultra', '2K', '4K'] as const;
 
 	let { data }: { data: PageData } = $props();
 	let media = $derived(data.rezkaData);
@@ -18,58 +23,157 @@
 	let selectedSeasonIndex = $state<number>(0);
 	let selectedEpisodeIndex = $state<number>(0);
 
-	let currentSeason = $derived(media.seasons[selectedSeasonIndex] || media.seasons[0]);
-	let currentEpisode = $derived(currentSeason?.episodes[selectedEpisodeIndex] || currentSeason?.episodes[0]);
+	let currentSeason = $derived<SeasonItem | undefined>(media.seasons[selectedSeasonIndex] || media.seasons[0]);
+	let currentEpisode = $derived<EpisodeItem | undefined>(currentSeason?.episodes[selectedEpisodeIndex] || currentSeason?.episodes[0]);
 
 	// Streams and Subtitles fetched for the active episode
 	let activeStreams = $state<StreamItem[]>([]);
 	let activeSubtitles = $state<SubtitleItem[]>([]);
 	let isLoadingStream = $state<boolean>(false);
-	let selectedQuality = $state<string>('');
+	let selectedQuality = $state<string>('360p');
+
+	// Multi-subtitle selection state (multiple checkboxes active simultaneously)
+	let enabledSubtitleCodes = $state<string[]>(['en']);
+	let singleSubtitleCode = $state<string>('en');
+	let subtitleCuesMap = $state<Record<string, VttCue[]>>({});
+	let currentVideoTime = $state<number>(0);
+
+	// Available non-premium stream map (using plain object for reactivity compliance)
+	let availableStreamMap = $derived.by(() => {
+		const record: Record<string, StreamItem> = {};
+		activeStreams.forEach((s) => {
+			if (!s.isPremium) {
+				record[s.quality] = s;
+			}
+		});
+		return record;
+	});
 
 	// Active Video URL derived from selected quality
 	let rawVideoUrl = $derived.by(() => {
 		if (activeStreams.length === 0) return null;
-		if (selectedQuality) {
-			const found = activeStreams.find((s) => s.quality === selectedQuality);
-			if (found) return found.streamUrl;
+		
+		// 1. Try currently selected quality
+		if (selectedQuality && availableStreamMap[selectedQuality]) {
+			return availableStreamMap[selectedQuality].streamUrl;
 		}
-		// Prefer 720p or 1080p, else first
-		const default720 = activeStreams.find((s) => s.quality === '720p');
-		const default1080 = activeStreams.find((s) => s.quality === '1080p');
-		return default720?.streamUrl || default1080?.streamUrl || activeStreams[0]?.streamUrl;
+
+		// 2. Fallbacks: 360p -> 480p -> 720p -> 1080p -> first available non-premium
+		for (const q of ALL_QUALITIES) {
+			if (availableStreamMap[q]) {
+				return availableStreamMap[q].streamUrl;
+			}
+		}
+
+		return activeStreams[0]?.streamUrl || null;
 	});
 
-	// Use proxy to ensure 100% reliable CORS, SSL, and partial range request playback
+	// Use proxy for HLS / MP4 playback
 	let activeVideoUrl = $derived.by(() => {
 		if (!rawVideoUrl) return null;
 		return `/api/proxy/video?url=${encodeURIComponent(rawVideoUrl)}`;
-	});
-
-	let availableQualities = $derived.by(() => {
-		const qSet = new Set<string>();
-		activeStreams.forEach((s) => qSet.add(s.quality));
-		return Array.from(qSet);
 	});
 
 	let videoElement = $state<HTMLVideoElement | null>(null);
 	let hlsInstance: Hls | null = null;
 	let playbackError = $state<string | null>(null);
 
+	// Active multi-subtitle lines based on current video time
+	let activeSubtitleLines = $derived.by(() => {
+		const lines: Array<{ langCode: string; langName: string; text: string; colorClass: string }> = [];
+		const time = currentVideoTime;
+
+		const activeCodes = rezkaVideoWatching_subtitles === 'checkbox_that_allows_to_select_multiple'
+			? enabledSubtitleCodes
+			: singleSubtitleCode && singleSubtitleCode !== 'off' ? [singleSubtitleCode] : [];
+
+		for (const sub of activeSubtitles) {
+			if (!activeCodes.includes(sub.langCode)) continue;
+			const cues = subtitleCuesMap[sub.langCode] || [];
+			const matchingCue = cues.find((c) => time >= c.start && time <= c.end);
+			if (matchingCue) {
+				let colorClass = 'text-zinc-100';
+				if (sub.langCode.includes('en')) colorClass = 'text-amber-300';
+				else if (sub.langCode.includes('ua') || sub.langCode.includes('uk')) colorClass = 'text-sky-300';
+
+				lines.push({
+					langCode: sub.langCode,
+					langName: sub.langName,
+					text: matchingCue.text,
+					colorClass
+				});
+			}
+		}
+		return lines;
+	});
+
+	async function loadSubtitleCues(sub: SubtitleItem) {
+		if (subtitleCuesMap[sub.langCode]) return;
+		try {
+			const resp = await fetch(`/api/rezka/subtitles?url=${encodeURIComponent(sub.subtitleUrl)}`);
+			if (resp.ok) {
+				const text = await resp.text();
+				const cues = parseVttText(text);
+				subtitleCuesMap = { ...subtitleCuesMap, [sub.langCode]: cues };
+			}
+		} catch {
+			// Subtitle load failure handled silently
+		}
+	}
+
+	function handleToggleSubtitle(langCode: string) {
+		if (enabledSubtitleCodes.includes(langCode)) {
+			enabledSubtitleCodes = enabledSubtitleCodes.filter((c) => c !== langCode);
+		} else {
+			enabledSubtitleCodes = [...enabledSubtitleCodes, langCode];
+			const sub = activeSubtitles.find((s) => s.langCode === langCode);
+			if (sub) loadSubtitleCues(sub);
+		}
+
+		saveMediaSettings(media.canonicalUrl, {
+			enabledSubtitleCodes
+		});
+	}
+
+	function handleSingleSubtitleChange(langCode: string) {
+		singleSubtitleCode = langCode;
+		if (langCode !== 'off') {
+			const sub = activeSubtitles.find((s) => s.langCode === langCode);
+			if (sub) loadSubtitleCues(sub);
+		}
+		saveMediaSettings(media.canonicalUrl, {
+			enabledSubtitleCodes: langCode === 'off' ? [] : [langCode]
+		});
+	}
+
 	async function fetchEpisodeStreams(seasonNum: number, epNum: number, transId: number) {
 		isLoadingStream = true;
 		playbackError = null;
+		subtitleCuesMap = {};
+
 		try {
 			const resp = await fetch(`/api/rezka/stream?id=${media.postId}&translator_id=${transId}&season=${seasonNum}&episode=${epNum}`);
 			const result = await resp.json();
 			if (result.success && result.streams && result.streams.length > 0) {
 				activeStreams = result.streams;
 				activeSubtitles = result.subtitles || [];
+
+				// Load cues for pre-enabled subtitles
+				activeSubtitles.forEach((sub) => {
+					const isSubActive = rezkaVideoWatching_subtitles === 'checkbox_that_allows_to_select_multiple'
+						? enabledSubtitleCodes.includes(sub.langCode)
+						: singleSubtitleCode === sub.langCode;
+
+					if (isSubActive) {
+						loadSubtitleCues(sub);
+					}
+				});
 			} else {
 				playbackError = result.error || 'Failed to load video stream for this episode.';
 			}
-		} catch (err: any) {
-			playbackError = err?.message || 'Network error fetching stream.';
+		} catch (err: unknown) {
+			const msg = err instanceof Error ? err.message : 'Network error fetching stream.';
+			playbackError = msg;
 		} finally {
 			isLoadingStream = false;
 		}
@@ -127,6 +231,38 @@
 	});
 
 	onMount(() => {
+		// Restore persisted media settings for this canonical URL
+		const saved = loadMediaSettings(media.canonicalUrl, {
+			seasonIndex: 0,
+			episodeIndex: 0,
+			quality: '360p',
+			dubbingId: defaultDubbingId,
+			enabledSubtitleCodes: ['en']
+		});
+
+		if (saved.seasonIndex < media.seasons.length) {
+			selectedSeasonIndex = saved.seasonIndex;
+			const season = media.seasons[saved.seasonIndex];
+			if (season && saved.episodeIndex < season.episodes.length) {
+				selectedEpisodeIndex = saved.episodeIndex;
+			}
+		}
+
+		if (saved.quality) {
+			selectedQuality = saved.quality;
+		}
+
+		if (saved.dubbingId) {
+			selectedDubbingId = saved.dubbingId;
+		}
+
+		if (saved.enabledSubtitleCodes) {
+			enabledSubtitleCodes = saved.enabledSubtitleCodes;
+			if (saved.enabledSubtitleCodes.length > 0) {
+				singleSubtitleCode = saved.enabledSubtitleCodes[0];
+			}
+		}
+
 		return () => {
 			if (hlsInstance) {
 				hlsInstance.destroy();
@@ -138,18 +274,40 @@
 	function handleSeasonChange(index: number) {
 		selectedSeasonIndex = index;
 		selectedEpisodeIndex = 0;
+		saveMediaSettings(media.canonicalUrl, {
+			seasonIndex: index,
+			episodeIndex: 0
+		});
 	}
 
 	function handleEpisodeChange(index: number) {
 		selectedEpisodeIndex = index;
+		saveMediaSettings(media.canonicalUrl, {
+			episodeIndex: index
+		});
 	}
 
-	function handleDubbingClick(dubbing: typeof media.dubbings[0]) {
+	function handleQualityChange(q: string) {
+		selectedQuality = q;
+		saveMediaSettings(media.canonicalUrl, {
+			quality: q
+		});
+	}
+
+	function handleDubbingClick(dubbing: DubbingItem) {
 		if (!dubbing.hasVideo) {
 			alert(`No scraped stream data for ${dubbing.title}. Only Original (English + subtitles) stream links are extracted.`);
 			return;
 		}
 		selectedDubbingId = dubbing.translatorId;
+		saveMediaSettings(media.canonicalUrl, {
+			dubbingId: dubbing.translatorId
+		});
+	}
+
+	function handleTimeUpdate(e: Event) {
+		const target = e.currentTarget as HTMLVideoElement;
+		currentVideoTime = target.currentTime;
 	}
 </script>
 
@@ -161,6 +319,7 @@
 	<!-- Top Navigation -->
 	<header class="sticky top-0 z-50 backdrop-blur-xl bg-zinc-950/80 border-b border-zinc-800 px-4 lg:px-8 py-3.5">
 		<div class="max-w-7xl mx-auto flex items-center justify-between">
+			<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
 			<a href="/" class="flex items-center gap-2.5 text-zinc-300 hover:text-white transition-colors group">
 				<div class="p-1.5 rounded-lg bg-zinc-900 border border-zinc-800 group-hover:border-zinc-700">
 					<svg class="w-4 h-4 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -204,7 +363,7 @@
 						Смотреть {media.titleRu} онлайн в HD качестве {media.qualityTag}
 					</span>
 				{/if}
-				<button class="px-3 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 transition-colors font-medium flex items-center gap-1.5">
+				<button type="button" class="px-3 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 transition-colors font-medium flex items-center gap-1.5">
 					<svg class="w-3.5 h-3.5 text-amber-400" fill="currentColor" viewBox="0 0 20 20">
 						<path d="M6.3 2.841A1.5 1.5 0 004 4.11v11.78a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z"/>
 					</svg>
@@ -225,10 +384,11 @@
 				</div>
 
 				<div class="flex flex-wrap gap-2">
-					{#each media.dubbings as dubbing}
+					{#each media.dubbings as dubbing (dubbing.translatorId)}
 						{@const isActive = dubbing.translatorId === activeDubbingId}
 						{@const isEnabled = dubbing.hasVideo}
 						<button
+							type="button"
 							onclick={() => handleDubbingClick(dubbing)}
 							class="px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all duration-200 border flex items-center gap-1.5
 							{isActive
@@ -249,7 +409,7 @@
 				</div>
 			</div>
 
-			<!-- Video Player Container -->
+			<!-- Video Player Container with Multi-Subtitle Overlay -->
 			<div class="relative w-full aspect-video bg-black rounded-2xl overflow-hidden border border-zinc-800 shadow-inner group">
 				{#if isLoadingStream}
 					<div class="absolute inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center z-10">
@@ -262,24 +422,30 @@
 
 				<video
 					bind:this={videoElement}
+					ontimeupdate={handleTimeUpdate}
 					controls
 					playsinline
+					crossorigin="anonymous"
 					preload="metadata"
 					class="w-full h-full object-contain"
 				>
-					{#each activeSubtitles as sub}
-						<track
-							kind="subtitles"
-							label={sub.langName}
-							srclang={sub.langCode}
-							src={sub.subtitleUrl}
-							default={sub.langCode.includes('en') || sub.langCode.includes('ru')}
-						/>
-					{/each}
 				</video>
 
+				<!-- Simultaneous Multi-Subtitle Display Overlay -->
+				{#if activeSubtitleLines.length > 0}
+					<div class="absolute bottom-12 inset-x-0 pointer-events-none flex flex-col items-center justify-end px-6 space-y-1.5 z-20">
+						{#each activeSubtitleLines as line (line.langCode)}
+							<div class="px-4 py-1.5 rounded-xl bg-black/85 backdrop-blur-xs border border-zinc-800 shadow-2xl text-center max-w-3xl">
+								<p class="text-sm md:text-base font-semibold leading-snug tracking-wide drop-shadow-md {line.colorClass}">
+									{line.text}
+								</p>
+							</div>
+						{/each}
+					</div>
+				{/if}
+
 				{#if playbackError}
-					<div class="absolute inset-0 bg-black/80 flex items-center justify-center p-6 text-center z-20">
+					<div class="absolute inset-0 bg-black/80 flex items-center justify-center p-6 text-center z-30">
 						<div class="max-w-md space-y-3">
 							<p class="text-amber-400 text-sm font-semibold">{playbackError}</p>
 							{#if activeVideoUrl}
@@ -290,41 +456,101 @@
 				{/if}
 			</div>
 
-			<!-- Player Info Bar: Stream Quality & Subtitle Pickers -->
-			<div class="flex flex-wrap items-center justify-between gap-4 p-4 rounded-2xl bg-zinc-950/60 border border-zinc-800/60 text-xs">
-				<div class="flex items-center gap-3">
+			<!-- Player Controls & Options Bar: Quality Switcher & Subtitles Options -->
+			<div class="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 rounded-2xl bg-zinc-950/60 border border-zinc-800/60 text-xs">
+				<!-- Quality Selector -->
+				<div class="flex flex-wrap items-center gap-3">
 					<span class="text-zinc-400 font-medium">Качество:</span>
 					<div class="flex flex-wrap gap-1.5">
-						{#each availableQualities as q}
+						{#each ALL_QUALITIES as q (q)}
+							{@const streamItem = availableStreamMap[q]}
+							{@const isAvailable = !!streamItem}
+							{@const isSelected = selectedQuality === q}
 							<button
-								onclick={() => (selectedQuality = q)}
-								class="px-2.5 py-1 rounded-lg font-mono text-xs font-semibold transition-colors border
-								{selectedQuality === q || (!selectedQuality && (q === '720p' || q === '1080p'))
-									? 'bg-amber-500 text-zinc-950 border-amber-400 font-bold'
-									: 'bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-zinc-800'}"
+								type="button"
+								onclick={() => isAvailable && handleQualityChange(q)}
+								disabled={!isAvailable}
+								class="px-2.5 py-1 rounded-lg font-mono text-xs font-semibold transition-all border flex items-center gap-1
+								{isSelected && isAvailable
+									? 'bg-amber-500 text-zinc-950 border-amber-400 font-bold shadow-md shadow-amber-500/20'
+									: isAvailable
+										? 'bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border-zinc-800'
+										: 'bg-zinc-900/40 text-zinc-600 border-zinc-900/60 cursor-not-allowed opacity-40'}"
 							>
-								{q}
+								<span>{q}</span>
+								{#if !isAvailable}
+									<span class="text-[9px] text-zinc-600">✕</span>
+								{/if}
 							</button>
 						{/each}
 					</div>
 				</div>
 
-				{#if activeSubtitles.length > 0}
-					<div class="flex items-center gap-2">
+				<!-- Subtitles: Multiple Checkboxes mode vs Default Single mode -->
+				<div class="flex flex-wrap items-center gap-3">
+					{#if rezkaVideoWatching_subtitles === 'checkbox_that_allows_to_select_multiple'}
+						<span class="text-zinc-400 font-medium">Субтитры (можно выбрать несколько):</span>
+						<div class="flex flex-wrap gap-2">
+							{#if activeSubtitles.length > 0}
+								{#each activeSubtitles as sub (sub.langCode)}
+									{@const isChecked = enabledSubtitleCodes.includes(sub.langCode)}
+									<label
+										class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-medium cursor-pointer transition-colors
+										{isChecked
+											? 'bg-amber-500/20 text-amber-300 border-amber-500/40 font-semibold'
+											: 'bg-zinc-900 text-zinc-400 border-zinc-800 hover:text-zinc-200'}"
+									>
+										<input
+											type="checkbox"
+											checked={isChecked}
+											onchange={() => handleToggleSubtitle(sub.langCode)}
+											class="w-3.5 h-3.5 rounded bg-zinc-800 border-zinc-700 text-amber-500 focus:ring-amber-500 focus:ring-offset-zinc-900 cursor-pointer"
+										/>
+										<span>{sub.langName}</span>
+									</label>
+								{/each}
+							{:else}
+								<span class="text-zinc-500">Загрузка субтитров...</span>
+							{/if}
+						</div>
+					{:else}
 						<span class="text-zinc-400 font-medium">Субтитры:</span>
-						<span class="text-xs text-zinc-300 font-medium">
-							{activeSubtitles.map((s) => s.langName).join(', ')}
-						</span>
-					</div>
-				{/if}
+						<div class="flex flex-wrap gap-1.5">
+							<button
+								type="button"
+								onclick={() => handleSingleSubtitleChange('off')}
+								class="px-2.5 py-1 rounded-lg text-xs font-semibold border transition-colors
+								{singleSubtitleCode === 'off'
+									? 'bg-amber-500 text-zinc-950 border-amber-400'
+									: 'bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border-zinc-800'}"
+							>
+								Выкл
+							</button>
+							{#each activeSubtitles as sub (sub.langCode)}
+								{@const isSelected = singleSubtitleCode === sub.langCode}
+								<button
+									type="button"
+									onclick={() => handleSingleSubtitleChange(sub.langCode)}
+									class="px-2.5 py-1 rounded-lg text-xs font-semibold border transition-colors
+									{isSelected
+										? 'bg-amber-500 text-zinc-950 border-amber-400 font-bold'
+										: 'bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-zinc-800'}"
+								>
+									{sub.langName}
+								</button>
+							{/each}
+						</div>
+					{/if}
+				</div>
 			</div>
 
 			<!-- Seasons Selector -->
 			<div class="space-y-2">
 				<span class="text-xs font-bold uppercase tracking-wider text-zinc-400">Сезоны:</span>
 				<div class="flex flex-wrap gap-2">
-					{#each media.seasons as season, sIndex}
+					{#each media.seasons as season, sIndex (season.seasonNumber)}
 						<button
+							type="button"
 							onclick={() => handleSeasonChange(sIndex)}
 							class="px-4 py-2 rounded-xl text-xs font-bold transition-all duration-200 border
 							{selectedSeasonIndex === sIndex
@@ -341,8 +567,9 @@
 			<div class="space-y-2">
 				<span class="text-xs font-bold uppercase tracking-wider text-zinc-400">Серии ({currentSeason?.title}):</span>
 				<div class="flex flex-wrap gap-2 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
-					{#each currentSeason?.episodes || [] as episode, eIndex}
+					{#each currentSeason?.episodes || [] as episode, eIndex (episode.episodeNumber)}
 						<button
+							type="button"
 							onclick={() => handleEpisodeChange(eIndex)}
 							class="px-3.5 py-2 rounded-xl text-xs font-semibold transition-all duration-200 border
 							{selectedEpisodeIndex === eIndex
@@ -395,7 +622,7 @@
 						{#if media.lists.length > 0}
 							<dt class="font-medium text-zinc-400">Входит в списки:</dt>
 							<dd class="sm:col-span-2 space-y-1 text-zinc-300">
-								{#each media.lists as listTitle}
+								{#each media.lists as listTitle (listTitle)}
 									<div class="flex items-center gap-2">
 										<span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
 										<span>{listTitle}</span>
@@ -432,7 +659,7 @@
 						{#if media.genres.length > 0}
 							<dt class="font-medium text-zinc-400">Жанр:</dt>
 							<dd class="sm:col-span-2 flex flex-wrap gap-1.5">
-								{#each media.genres as g}
+								{#each media.genres as g (g)}
 									<span class="px-2.5 py-0.5 rounded-md bg-zinc-800 text-zinc-200 border border-zinc-700 text-xs">
 										{g}
 									</span>
@@ -462,7 +689,7 @@
 						{#if media.collections.length > 0}
 							<dt class="font-medium text-zinc-400">Из серии:</dt>
 							<dd class="sm:col-span-2 flex flex-wrap gap-1.5">
-								{#each media.collections as c}
+								{#each media.collections as c (c)}
 									<span class="px-2 py-0.5 rounded-md bg-zinc-800/80 text-zinc-300 text-xs">
 										{c}
 									</span>
@@ -501,20 +728,20 @@
 				<div class="rounded-3xl bg-gradient-to-br from-zinc-900 to-zinc-950 border border-zinc-800/80 p-6 space-y-5 shadow-xl">
 					<h3 class="text-base font-bold text-white flex items-center gap-2">
 						<span class="w-2 h-2 rounded-full bg-amber-500"></span>
-						<span>Original Master Audio & Video</span>
+						<span>Simultaneous Multi-Subtitles</span>
 					</h3>
 					<div class="space-y-3 text-xs text-zinc-300">
 						<div class="p-3 rounded-2xl bg-zinc-950/70 border border-zinc-800/80 space-y-1">
-							<span class="font-bold text-amber-400 block">Original English Audio</span>
-							<p class="text-zinc-400">All 5 seasons (62 episodes) extracted in crystal clear high bitrate stream format.</p>
+							<span class="font-bold text-amber-400 block">English Subtitles</span>
+							<p class="text-zinc-400">Rendered in high contrast yellow overlay.</p>
 						</div>
 						<div class="p-3 rounded-2xl bg-zinc-950/70 border border-zinc-800/80 space-y-1">
-							<span class="font-bold text-emerald-400 block">Multiple Subtitle Tracks</span>
-							<p class="text-zinc-400">Timed VTT subtitles in English, Russian, and Ukrainian.</p>
+							<span class="font-bold text-zinc-100 block">Russian Subtitles</span>
+							<p class="text-zinc-400">Rendered in clean white text overlay.</p>
 						</div>
 						<div class="p-3 rounded-2xl bg-zinc-950/70 border border-zinc-800/80 space-y-1">
-							<span class="font-bold text-indigo-400 block">Adaptive Bitrate Streaming</span>
-							<p class="text-zinc-400">Available in 360p, 480p, 720p, 1080p and 1080p Ultra.</p>
+							<span class="font-bold text-sky-400 block">Ukrainian Subtitles</span>
+							<p class="text-zinc-400">Rendered in cyan text overlay.</p>
 						</div>
 					</div>
 				</div>

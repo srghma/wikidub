@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { PageData } from './$types';
+	import { resolve } from '$app/paths';
 
 	let { data }: { data: PageData } = $props();
 
@@ -53,7 +54,7 @@
 			<!-- Quick Scraped Link Notification Banner -->
 			<div class="flex items-center space-x-3">
 				<a
-					href="/rezka/series/thriller/646-vo-vse-tyazhkie-2008-latest.html"
+					href={resolve('/rezka/[...url]', { url: 'series/thriller/646-vo-vse-tyazhkie-2008-latest.html' })}
 					class="group inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white text-xs font-semibold shadow-lg shadow-emerald-950/50 hover:shadow-emerald-600/20 transition-all duration-200 border border-emerald-500/30"
 				>
 					<span class="relative flex h-2 w-2">
@@ -174,7 +175,7 @@
 							<!-- Genres -->
 							{#if title.genres && title.genres.length > 0}
 								<div class="flex flex-wrap gap-1.5 pt-1">
-									{#each title.genres.slice(0, 3) as g}
+									{#each title.genres.slice(0, 3) as g (g)}
 										<span class="text-[10px] px-2 py-0.5 rounded-md bg-zinc-800/90 text-zinc-300 border border-zinc-700/50">
 											{g}
 										</span>
@@ -202,6 +203,7 @@
 			</div>
 
 			<!-- Pagination -->
+			<!-- eslint-disable svelte/no-navigation-without-resolve -->
 			<div class="flex items-center justify-center gap-3 pt-6">
 				{#if data.page > 1}
 					<a
@@ -223,6 +225,7 @@
 					</a>
 				{/if}
 			</div>
+			<!-- eslint-enable svelte/no-navigation-without-resolve -->
 		</section>
 	</main>
 </div>
