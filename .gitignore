@@ -1,0 +1,17 @@
+.env
+node_modules/
+data/
+*.db
+*.db-journal
+*.log
+.direnv/
+result
+.pg/
+.next/
+.chrome-user-data-dir/
+.chrome-user-data-dir1/
+.chrome-user-data-dir2/
+.chrome-workers/
+dumps/
+*.sql.gz
+imdb/*.tsv.gz
