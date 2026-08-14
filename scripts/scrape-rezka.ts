@@ -30,7 +30,7 @@ async function main() {
 	const page = await browser.newPage();
 	console.log(`🌐 Navigating to ${TARGET_URL}...`);
 	
-	await page.goto(TARGET_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+	await page.goto(TARGET_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
 	
 	// Scroll to bottom to ensure dynamic elements/scripts load
 	await page.evaluate(async () => {
@@ -62,17 +62,18 @@ async function main() {
 	console.log(`📄 Page content fetched. Canonical URL: ${canonicalUrl}. Size: ${html.length} bytes.`);
 
 	console.log('💾 Saving into raw_cached_pages database table...');
-	await sql`
+	const res = await sql`
 		INSERT INTO raw_cached_pages (canonical_url, html, fetched_at)
 		VALUES (${canonicalUrl}, ${html}, NOW())
 		ON CONFLICT (canonical_url) DO UPDATE
 		SET html = EXCLUDED.html, fetched_at = NOW()
+		RETURNING id, canonical_url
 	`;
 
-	console.log('✅ Page successfully cached in DB!');
+	console.log('✅ Page successfully cached in DB! Saved row:', res);
 	await page.close();
-	await sql.end();
-	process.exit(0);
+	await sql.end({ timeout: 5 });
+	console.log('🏁 Scraper finished cleanly.');
 }
 
 main().catch((err) => {
